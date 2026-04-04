@@ -43,7 +43,9 @@ def detect_hot_pixels(
         residual = np.clip(plane - local_median, 0.0, None)
         local_noise = cv2.medianBlur(np.abs(plane - local_median), kernel_size) * 1.4826 + 1e-4
         bright_support = cv2.filter2D(
-            (plane > (local_median + np.maximum(min_excess * 0.5, local_noise * 3.0))).astype(np.uint8),
+            (plane > (local_median + np.maximum(min_excess * 0.5, local_noise * 3.0))).astype(
+                np.uint8
+            ),
             cv2.CV_16U,
             support_kernel,
             borderType=cv2.BORDER_REFLECT,

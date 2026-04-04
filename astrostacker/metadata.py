@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,6 +11,7 @@ import numpy as np
 
 
 _RATIONAL_RE = re.compile(r"(-?\d+)(?:/(\d+))?")
+_EXIV2_WARNED = False
 
 
 @dataclass(slots=True)
@@ -48,6 +51,49 @@ class LensCorrectionProfile:
         return delta.astype(np.float32)
 
 
+@dataclass(slots=True, frozen=True)
+class ExifTag:
+    key: str
+    type_name: str
+    value: str
+
+
+@dataclass(slots=True, frozen=True)
+class OutputExifMetadata:
+    tags: tuple[ExifTag, ...]
+
+
+_OUTPUT_EXIF_TAGS = (
+    "Exif.Image.Make",
+    "Exif.Image.Model",
+    "Exif.Image.DateTime",
+    "Exif.Photo.DateTimeOriginal",
+    "Exif.Photo.DateTimeDigitized",
+    "Exif.Photo.OffsetTime",
+    "Exif.Photo.OffsetTimeOriginal",
+    "Exif.Photo.OffsetTimeDigitized",
+    "Exif.Photo.ExposureTime",
+    "Exif.Photo.FNumber",
+    "Exif.Photo.ExposureBiasValue",
+    "Exif.Photo.ISOSpeedRatings",
+    "Exif.Photo.PhotographicSensitivity",
+    "Exif.Photo.RecommendedExposureIndex",
+    "Exif.Photo.FocalLength",
+    "Exif.Photo.FocalLengthIn35mmFilm",
+    "Exif.Photo.LensMake",
+    "Exif.Photo.LensModel",
+    "Exif.Photo.LensSpecification",
+    "Exif.GPSInfo.GPSLatitudeRef",
+    "Exif.GPSInfo.GPSLatitude",
+    "Exif.GPSInfo.GPSLongitudeRef",
+    "Exif.GPSInfo.GPSLongitude",
+    "Exif.GPSInfo.GPSAltitudeRef",
+    "Exif.GPSInfo.GPSAltitude",
+    "Exif.GPSInfo.GPSDateStamp",
+    "Exif.GPSInfo.GPSTimeStamp",
+)
+
+
 def _parse_rationals(text: str) -> list[float]:
     values: list[float] = []
     for token in text.split():
@@ -71,14 +117,52 @@ def _parse_fuji_curve(
     return scale, nodes, samples
 
 
-def load_lens_profile(raw_path: Path) -> LensCorrectionProfile:
-    cmd = ["exiv2", "-pt", str(raw_path)]
-    output = subprocess.check_output(cmd, text=True)
-    tags: dict[str, str] = {}
+def _read_exif_tags(
+    image_path: Path,
+    *,
+    keys: tuple[str, ...] | None = None,
+) -> dict[str, ExifTag]:
+    if shutil.which("exiv2") is None:
+        _warn_missing_exiv2("reading EXIF metadata")
+        return {}
+
+    cmd = ["exiv2", "-PEkycv"]
+    if keys is not None:
+        for key in keys:
+            cmd.extend(["-K", key])
+    cmd.append(str(image_path))
+    try:
+        output = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        _warn_missing_exiv2("reading EXIF metadata")
+        return {}
+
+    tags: dict[str, ExifTag] = {}
     for line in output.splitlines():
         parts = line.split(None, 3)
-        if len(parts) == 4 and parts[0].startswith("Exif."):
-            tags[parts[0]] = parts[3].strip()
+        if len(parts) < 3 or not parts[0].startswith("Exif."):
+            continue
+        key = parts[0]
+        type_name = parts[1]
+        value = parts[3].strip() if len(parts) == 4 else ""
+        tags[key] = ExifTag(key=key, type_name=type_name, value=value)
+    return tags
+
+
+def _warn_missing_exiv2(action: str) -> None:
+    global _EXIV2_WARNED
+    if _EXIV2_WARNED:
+        return
+    warnings.warn(
+        f"exiv2 is not available; {action} will be skipped.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    _EXIV2_WARNED = True
+
+
+def load_lens_profile(raw_path: Path) -> LensCorrectionProfile:
+    tags = {tag.key: tag.value for tag in _read_exif_tags(raw_path).values()}
 
     distortion_scale, distortion_nodes, distortion_values = _parse_fuji_curve(
         _parse_rationals(tags.get("Exif.Fujifilm.GeometricDistortionParams", ""))
@@ -100,3 +184,25 @@ def load_lens_profile(raw_path: Path) -> LensCorrectionProfile:
         distortion_nodes=distortion_nodes,
         distortion_values=distortion_values,
     )
+
+
+def load_output_exif_metadata(raw_path: Path) -> OutputExifMetadata:
+    tags = _read_exif_tags(raw_path, keys=_OUTPUT_EXIF_TAGS)
+    ordered_tags = tuple(tags[key] for key in _OUTPUT_EXIF_TAGS if key in tags and tags[key].value)
+    return OutputExifMetadata(tags=ordered_tags)
+
+
+def apply_output_exif_metadata(path: Path, metadata: OutputExifMetadata | None) -> None:
+    if metadata is None or not metadata.tags:
+        return
+    if shutil.which("exiv2") is None:
+        _warn_missing_exiv2("writing output EXIF metadata")
+        return
+    cmd = ["exiv2"]
+    for tag in metadata.tags:
+        cmd.extend(["-M", f"set {tag.key} {tag.type_name} {tag.value}"])
+    cmd.append(str(path))
+    try:
+        subprocess.run(cmd, check=True, stderr=subprocess.DEVNULL)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        _warn_missing_exiv2("writing output EXIF metadata")

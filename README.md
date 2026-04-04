@@ -17,6 +17,8 @@ It currently does the following:
 
 To get the segmentation model that separates the foreground from the night sky, you'll need to get the weights from https://huggingface.co/facebook/sam3.
 
+`exiv2` is also an external dependency. Astrostacker uses it to read Fuji lens correction metadata and to copy selected EXIF/GPS fields into the exported TIFF. If `exiv2` is missing, the pipeline still runs, but lens correction metadata and EXIF passthrough are skipped.
+
 ```bash
 uv sync
 ```

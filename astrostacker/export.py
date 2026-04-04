@@ -5,6 +5,8 @@ from pathlib import Path
 import numpy as np
 import tifffile
 
+from astrostacker.metadata import OutputExifMetadata, apply_output_exif_metadata
+
 
 def resolve_output_path(path: Path) -> Path:
     if path.suffix == "":
@@ -18,6 +20,7 @@ def write_linear_tiff(
     path: Path,
     image: np.ndarray,
     *,
+    exif_metadata: OutputExifMetadata | None = None,
     software: str = "astrostacker",
 ) -> Path:
     resolved = resolve_output_path(path)
@@ -32,4 +35,5 @@ def write_linear_tiff(
         compression=None,
         software=software,
     )
+    apply_output_exif_metadata(resolved, exif_metadata)
     return resolved

@@ -13,7 +13,10 @@ from astrostacker.segmentation import segment_sky
 
 
 def _resize_mask(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
-    return cv2.resize(mask.astype(np.float32), (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST) > 0.5
+    return (
+        cv2.resize(mask.astype(np.float32), (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST)
+        > 0.5
+    )
 
 
 def _preview_points(mask: np.ndarray, scale: int) -> np.ndarray:
@@ -153,7 +156,9 @@ def main() -> None:
     )
     write_png(args.debug_dir / "baseline_hot_pixels.png", baseline_overlay)
     write_png(args.debug_dir / "candidate_hot_pixels.png", candidate_overlay)
-    write_png(args.debug_dir / "foreground_mask.png", segmentation.foreground_mask.astype(np.float32))
+    write_png(
+        args.debug_dir / "foreground_mask.png", segmentation.foreground_mask.astype(np.float32)
+    )
     write_png(args.debug_dir / "sky_mask.png", segmentation.sky_mask.astype(np.float32))
 
     if args.sweep:

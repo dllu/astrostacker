@@ -152,7 +152,10 @@ def read_raw_frame(
         transient_hot_pixel_count = int(np.count_nonzero(transient_hot_pixels))
         combined_hot_pixels = transient_hot_pixels
         persistent_hot_pixel_count = 0
-        if persistent_hot_pixel_mask is not None and persistent_hot_pixel_mask.shape == linear_raw.shape:
+        if (
+            persistent_hot_pixel_mask is not None
+            and persistent_hot_pixel_mask.shape == linear_raw.shape
+        ):
             persistent_hot_pixel_count = int(np.count_nonzero(persistent_hot_pixel_mask))
             combined_hot_pixels = combined_hot_pixels | persistent_hot_pixel_mask
         corrected_hot_pixel_count = int(np.count_nonzero(combined_hot_pixels))

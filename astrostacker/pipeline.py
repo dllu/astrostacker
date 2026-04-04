@@ -21,7 +21,7 @@ from astrostacker.export import write_linear_tiff
 from astrostacker.fusion import FusionResult, create_streaming_fusion
 from astrostacker.hotpixels import build_persistent_hot_pixel_map, detect_hot_pixels
 from astrostacker.lens import build_radial_remap, undistort_image, undistort_valid_mask
-from astrostacker.metadata import LensCorrectionProfile
+from astrostacker.metadata import LensCorrectionProfile, load_output_exif_metadata
 from astrostacker.rawio import read_raw_frame, read_raw_sensor
 from astrostacker.segmentation import SegmentationResult, segment_sky
 from astrostacker.stars import StarField, detect_stars
@@ -201,6 +201,7 @@ def run_pipeline(
     if not raw_paths:
         raise ValueError("No RAW input paths were provided.")
 
+    output_exif_metadata = load_output_exif_metadata(raw_paths[0])
     pipeline_start = perf_counter()
     ensure_dir(debug_dir)
     reference_index = len(raw_paths) // 2
@@ -214,7 +215,9 @@ def run_pipeline(
     reference_sensor_preview_shape: tuple[int, int] | None = None
     for index, path in enumerate(raw_paths):
         sensor_frame = read_raw_sensor(path, preview_scale=preview_scale)
-        transient_candidates = detect_hot_pixels(sensor_frame.raw_visible, sensor_frame.bayer_pattern)
+        transient_candidates = detect_hot_pixels(
+            sensor_frame.raw_visible, sensor_frame.bayer_pattern
+        )
         hot_pixel_detections.append(transient_candidates)
         debug_scale = max(1, preview_scale // 4)
         transient_overlay = overlay_points(
@@ -466,6 +469,7 @@ def run_pipeline(
     resolved_output_path = write_linear_tiff(
         output_path,
         np.clip(fusion.fused / max(np.percentile(fusion.fused, 99.8), 1e-6), 0.0, 1.0),
+        exif_metadata=output_exif_metadata,
     )
     _log_timing("export", export_start)
     _log_timing("pipeline total", pipeline_start)
