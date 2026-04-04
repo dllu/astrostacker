@@ -26,10 +26,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--preview-scale", type=int, default=8, help="Preview downsample factor.")
     parser.add_argument(
-        "--segmentation-scale",
+        "--segmentation-downsample",
         type=int,
-        default=2,
-        help="Extra downsample factor for segmentation previews.",
+        default=4,
+        help="Segmentation downsample factor relative to the original image size.",
     )
     parser.add_argument(
         "--dilation-radius", type=int, default=21, help="Foreground dilation radius."
@@ -55,7 +55,7 @@ def main() -> None:
         debug_dir=args.debug_dir,
         cache_dir=args.cache_dir,
         preview_scale=args.preview_scale,
-        segmentation_scale=args.segmentation_scale,
+        segmentation_downsample=args.segmentation_downsample,
         dilation_radius=args.dilation_radius,
         blur_radius=args.blur_radius,
         trim=args.trim,

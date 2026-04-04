@@ -22,6 +22,23 @@ class SegmentationResult:
     backend: str
 
 
+def _normalize_segmentation_image(
+    image: np.ndarray,
+    *,
+    lower_percentile: float = 1.0,
+    upper_percentile: float = 99.0,
+) -> np.ndarray:
+    data = np.clip(np.asarray(image, dtype=np.float32), 0.0, None)
+    lo = float(np.percentile(data, lower_percentile))
+    hi = float(np.percentile(data, upper_percentile))
+    if not np.isfinite(lo):
+        lo = 0.0
+    if not np.isfinite(hi) or hi <= lo + 1e-6:
+        hi = lo + 1e-6
+    normalized = (data - lo) / (hi - lo)
+    return np.clip(normalized, 0.0, 1.0).astype(np.float32)
+
+
 def _ensure_sam3_importable() -> bool:
     if not SAM3_ROOT.exists():
         return False
@@ -224,11 +241,12 @@ def segment_sky(
     blur_radius: int,
     sam3_checkpoint: str | None = None,
 ) -> SegmentationResult:
+    normalized_previews = [_normalize_segmentation_image(preview) for preview in previews]
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    mask = _sam3_masks(previews, device=device, checkpoint_path=sam3_checkpoint)
+    mask = _sam3_masks(normalized_previews, device=device, checkpoint_path=sam3_checkpoint)
     backend = "sam3"
     if mask is None:
-        mask = _heuristic_sky_mask(previews)
+        mask = _heuristic_sky_mask(normalized_previews)
         backend = "heuristic"
 
     mask = _clean_sky_mask(mask)

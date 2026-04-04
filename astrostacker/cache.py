@@ -34,14 +34,14 @@ def segmentation_cache_path(
     cache_dir: Path,
     raw_paths: list[Path],
     *,
-    segmentation_scale: int,
+    segmentation_downsample: int,
     dilation_radius: int,
     blur_radius: int,
     sam3_checkpoint: str | None,
 ) -> Path:
     payload = {
         "inputs": [_path_fingerprint(path) for path in raw_paths],
-        "segmentation_scale": segmentation_scale,
+        "segmentation_downsample": segmentation_downsample,
         "dilation_radius": dilation_radius,
         "blur_radius": blur_radius,
         "sam3_checkpoint": sam3_checkpoint,

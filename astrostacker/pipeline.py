@@ -19,9 +19,10 @@ from astrostacker.cache import (
 from astrostacker.debug import ensure_dir, overlay_points, overlay_vectors, write_png
 from astrostacker.export import write_linear_tiff
 from astrostacker.fusion import FusionResult, create_streaming_fusion
+from astrostacker.hotpixels import build_persistent_hot_pixel_map, detect_hot_pixels
 from astrostacker.lens import build_radial_remap, undistort_image, undistort_valid_mask
 from astrostacker.metadata import LensCorrectionProfile
-from astrostacker.rawio import read_raw_frame
+from astrostacker.rawio import read_raw_frame, read_raw_sensor
 from astrostacker.segmentation import SegmentationResult, segment_sky
 from astrostacker.stars import StarField, detect_stars
 
@@ -53,6 +54,13 @@ def _resize_mask(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
 def _log_timing(label: str, start_time: float) -> None:
     elapsed = perf_counter() - start_time
     print(f"[astrostacker] {label}: {elapsed:.2f}s")
+
+
+def _log_hot_pixels(label: str, *, transient: int, persistent: int, corrected: int) -> None:
+    print(
+        "[astrostacker] "
+        f"{label}: transient={transient} persistent_map={persistent} corrected_total={corrected}"
+    )
 
 
 def _phase_image(image: np.ndarray) -> np.ndarray:
@@ -160,6 +168,23 @@ def _build_alignment_result(
     )
 
 
+def _hot_pixel_preview(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    return cv2.resize(mask.astype(np.float32), (shape[1], shape[0]), interpolation=cv2.INTER_AREA)
+
+
+def _hot_pixel_preview_points(mask: np.ndarray, scale: int) -> np.ndarray:
+    coords = np.argwhere(mask)
+    if len(coords) == 0:
+        return _empty_points()
+    points = np.column_stack(
+        [
+            coords[:, 1].astype(np.float32) / float(scale),
+            coords[:, 0].astype(np.float32) / float(scale),
+        ]
+    )
+    return points.astype(np.float32)
+
+
 def run_pipeline(
     raw_paths: list[Path],
     *,
@@ -167,7 +192,7 @@ def run_pipeline(
     debug_dir: Path,
     cache_dir: Path | None = Path(".astrostacker-cache"),
     preview_scale: int = 4,
-    segmentation_scale: int = 2,
+    segmentation_downsample: int = 4,
     dilation_radius: int = 15,
     blur_radius: int = 7,
     trim: int = 1,
@@ -184,12 +209,55 @@ def run_pipeline(
     star_fields: list[StarField | None] = [None] * len(raw_paths)
     frame_alignments: list[FrameAlignment | None] = [None] * len(raw_paths)
 
+    hot_pixel_start = perf_counter()
+    hot_pixel_detections: list[np.ndarray] = []
+    reference_sensor_preview_shape: tuple[int, int] | None = None
+    for index, path in enumerate(raw_paths):
+        sensor_frame = read_raw_sensor(path, preview_scale=preview_scale)
+        transient_candidates = detect_hot_pixels(sensor_frame.raw_visible, sensor_frame.bayer_pattern)
+        hot_pixel_detections.append(transient_candidates)
+        debug_scale = max(1, preview_scale // 4)
+        transient_overlay = overlay_points(
+            sensor_frame.debug_preview,
+            _hot_pixel_preview_points(transient_candidates, debug_scale),
+            color=(255, 64, 64),
+        )
+        write_png(debug_dir / f"hot_pixels_transient_{index:02d}.png", transient_overlay)
+        if index == reference_index:
+            reference_sensor_preview_shape = (
+                max(1, sensor_frame.raw_visible.shape[0] // preview_scale),
+                max(1, sensor_frame.raw_visible.shape[1] // preview_scale),
+            )
+    hot_pixel_summary = build_persistent_hot_pixel_map(hot_pixel_detections)
+    if reference_sensor_preview_shape is not None and hot_pixel_summary.persistent_mask.size > 0:
+        write_png(
+            debug_dir / "hot_pixels_persistent_preview.png",
+            _hot_pixel_preview(hot_pixel_summary.persistent_mask, reference_sensor_preview_shape),
+        )
+    print(
+        "[astrostacker] hot pixel map: "
+        f"persistent={int(np.count_nonzero(hot_pixel_summary.persistent_mask))} "
+        f"threshold={hot_pixel_summary.threshold_count}/{len(raw_paths)}"
+    )
+    for path, count in zip(raw_paths, hot_pixel_summary.total_detections, strict=True):
+        print(f"[astrostacker] hot pixel scan {path.name}: transient_candidates={count}")
+    _log_timing("hot pixel scan", hot_pixel_start)
+
     reference_start = perf_counter()
     reference_frame = read_raw_frame(
-        raw_paths[reference_index], preview_scale=preview_scale, full_demosaic=True
+        raw_paths[reference_index],
+        preview_scale=preview_scale,
+        full_demosaic=True,
+        persistent_hot_pixel_mask=hot_pixel_summary.persistent_mask,
     )
     if reference_frame.linear_rgb is None:
         raise RuntimeError(f"Full demosaic failed for {reference_frame.path}")
+    _log_hot_pixels(
+        f"frame {reference_frame.path.name} hot pixels",
+        transient=reference_frame.transient_hot_pixel_count,
+        persistent=reference_frame.persistent_hot_pixel_count,
+        corrected=reference_frame.corrected_hot_pixel_count,
+    )
     frames[reference_index] = FrameContext(
         path=reference_frame.path,
         rgb_preview=reference_frame.rgb_preview,
@@ -210,10 +278,10 @@ def run_pipeline(
     _log_timing("reference decode", reference_start)
 
     reference_segmentation_preview = cv2.resize(
-        reference_frame.rgb_preview,
+        reference_frame.cfa_rgb,
         (
-            reference_frame.rgb_preview.shape[1] // segmentation_scale,
-            reference_frame.rgb_preview.shape[0] // segmentation_scale,
+            max(1, reference_frame.cfa_rgb.shape[1] // segmentation_downsample),
+            max(1, reference_frame.cfa_rgb.shape[0] // segmentation_downsample),
         ),
         interpolation=cv2.INTER_AREA,
     )
@@ -224,9 +292,9 @@ def run_pipeline(
             segmentation_cache_path(
                 cache_dir,
                 segmentation_inputs,
-                segmentation_scale=segmentation_scale,
-                dilation_radius=max(1, dilation_radius // segmentation_scale),
-                blur_radius=max(1, blur_radius // segmentation_scale),
+                segmentation_downsample=segmentation_downsample,
+                dilation_radius=max(1, dilation_radius // segmentation_downsample),
+                blur_radius=max(1, blur_radius // segmentation_downsample),
                 sam3_checkpoint=sam3_checkpoint,
             )
         )
@@ -234,8 +302,8 @@ def run_pipeline(
         segmentation_start = perf_counter()
         segmentation = segment_sky(
             [reference_segmentation_preview],
-            dilation_radius=max(1, dilation_radius // segmentation_scale),
-            blur_radius=max(1, blur_radius // segmentation_scale),
+            dilation_radius=max(1, dilation_radius // segmentation_downsample),
+            blur_radius=max(1, blur_radius // segmentation_downsample),
             sam3_checkpoint=sam3_checkpoint,
         )
         _log_timing("segmentation", segmentation_start)
@@ -244,9 +312,9 @@ def run_pipeline(
                 segmentation_cache_path(
                     cache_dir,
                     segmentation_inputs,
-                    segmentation_scale=segmentation_scale,
-                    dilation_radius=max(1, dilation_radius // segmentation_scale),
-                    blur_radius=max(1, blur_radius // segmentation_scale),
+                    segmentation_downsample=segmentation_downsample,
+                    dilation_radius=max(1, dilation_radius // segmentation_downsample),
+                    blur_radius=max(1, blur_radius // segmentation_downsample),
                     sam3_checkpoint=sam3_checkpoint,
                 ),
                 segmentation,
@@ -310,9 +378,20 @@ def run_pipeline(
             continue
 
         frame_start = perf_counter()
-        frame = read_raw_frame(path, preview_scale=preview_scale, full_demosaic=True)
+        frame = read_raw_frame(
+            path,
+            preview_scale=preview_scale,
+            full_demosaic=True,
+            persistent_hot_pixel_mask=hot_pixel_summary.persistent_mask,
+        )
         if frame.linear_rgb is None:
             raise RuntimeError(f"Full demosaic failed for {path}")
+        _log_hot_pixels(
+            f"frame {frame.path.name} hot pixels",
+            transient=frame.transient_hot_pixel_count,
+            persistent=frame.persistent_hot_pixel_count,
+            corrected=frame.corrected_hot_pixel_count,
+        )
         frames[index] = FrameContext(
             path=frame.path,
             rgb_preview=frame.rgb_preview,
