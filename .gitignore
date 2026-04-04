@@ -1,0 +1,14 @@
+.astrostacker-cache/
+.codex
+.ruff_cache/
+.venv/
+__pycache__/
+*.pyc
+astrostacker.egg-info/
+debug/
+debug2/
+*.tiff
+*.dng
+*.jpg
+*.xmp
+example/*.raf

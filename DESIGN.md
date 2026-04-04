@@ -1,0 +1,23 @@
+This is a project to perform stacking for wide angle astrophotography photos.
+We are given several frames as raw files from a camera mounted on a tripod, where each frame contains both a static foreground scene and the night sky.
+While the foreground can be expected to be static, we would like to align the sky.
+However, the night sky differs between the frames due to the rotation of the Earth.
+
+The input raw files may vary by camera model, and may include formats such as .raf, .arw, .cr3, .dng, .nef, etc.
+
+Here's the approach we shall take:
+1. Decode the raw file using `rawpy`.
+2. Use https://github.com/facebookresearch/sam3 to segment out the foreground vs the sky. For your convenience, I have already git cloned the `sam3` repo to `/home/dllu/proj/sam3`. We may dilate the foreground mask slightly (bias towards more foreground, less sky). With the dilation, it is also okay to perform the segmentation on a downsampled version of the raw file, as the raw file may be very large (100 megapixels). We may normalize each raw file (which may be quite underexposed each) first, run each frame through segmentation, and use a voting scheme to determine the mask.
+3. Use blob detection + subpixel peak detection to find the stars in the sky. We may use a mean shift algorithm or similar to perform the subpixel refinement.
+4. Use embedded distortion parameters from the raw file if available to correct the x, y coordinates of the star point detections, and then use some basic ransac to align them. We may select one of the frames (e.g. the middle frame) as a reference and align all the other frames to it by computing the homography. The alignment strategy will first start with RANSAC using a minimal number of points, for a sufficiently large number of trials, and produce a homography as well as inlier sets for both of the two frames being aligned. Then, we shall run an ICP refinement on the inlier set. We can use soft correspondences by using a Gaussian weight for every correspondence. Generally, we expect the final alignment to be within 1 or 2 px for each star (assuming that the distortion correction has been done correctly). But, we want to be a little more generous in the alignment stage to ensure that the basin of convergence is wide enough, so we can choose, say, something on the order of 5 px for RANSAC reprojection, and then likewise somewhere on the order of 5px for ICP correspondence weighting. We would expect maybe about 50% of points to be inliers and that the total displacement of points may be up to about 100 px.
+5. For each frame, demosaic and undistort the image using lens parameters if available, and apply color calibration matrix for the camera, but keep the intensities as linear scene-referred values. We should use a fairly advanced method of demosaicing, such as RCD.
+6. For each frame, compute the warped night sky along with the valid mask.
+7. Fuse all the frames by summing up the raw linear intensities. We should weigh the sums by the mask (which, after dilating the foreground, we can apply some blur to soften it, though the blur radius should be less than the dilation amount). For the foreground, when fusing, we should use a truncated sum (discard the top k and bottom k outliers) to avoid hot pixels. Typically k = 1 is sufficient. For the sky, just regular summing is fine (as we want to preserve transient objects like meteors).
+8. Finally, after correctly computing the weighted sum and normalizing by the total weight for each pixel, we should output as a DNG file. It is now ready to be used in your favourite raw processing software.
+
+Implementation details:
+* Implement in Python. First, create a `pyproject.toml` and use `uv sync`. Thereafter, you may run the code with `uv run python ...`. You should also aim to keep your code formatted with `uv format`.
+* We have access to an NVIDIA GPU on this platform. You may run `nvidia-smi` to check the specs of this RTX 5070 GPU, the installed CUDA version, and so on. You should use GPU acceleration where possible (primarily for segmentation).
+* In addition to `rawpy` and pytorch with CUDA, you should also feel free to pull in the dependencies that you consider are necessary for implementation.
+* While implementing, you should also output debug PNG images of the masks etc.
+* There's a directory called `examples` with several `raf` files that you can test on. These files have embedded distortion and vignetting data, which you must use. Due to the large size of these files (100 megapixels), it may be prudent to avoid testing on all the files at once while in the early stages of developing.
