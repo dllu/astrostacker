@@ -7,7 +7,7 @@ It currently does the following:
 - decodes RAW files with `rawpy`
 - scans RAW Bayer frames once to learn persistent hot pixels and repairs RAW-domain defects before demosaic
 - extracts Fuji lens metadata with `exiv2`
-- applies lens shading and radial distortion correction
+- applies radial distortion correction
 - segments sky vs foreground with SAM3 when available, with a heuristic fallback
 - detects stars and estimates a homography against a reference frame
 - fuses sky and foreground separately

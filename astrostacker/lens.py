@@ -12,7 +12,6 @@ from astrostacker.metadata import LensCorrectionProfile
 class RemapGrid:
     map_x: np.ndarray
     map_y: np.ndarray
-    gain: np.ndarray
 
 
 def build_radial_remap(
@@ -34,12 +33,11 @@ def build_radial_remap(
     scale[mask] = corrected_radius[mask] / radius[mask]
     map_x = (x * scale * radial_scale + cx).astype(np.float32)
     map_y = (y * scale * radial_scale + cy).astype(np.float32)
-    gain = profile.radial_gain(radius)
-    return RemapGrid(map_x=map_x, map_y=map_y, gain=gain.astype(np.float32))
+    return RemapGrid(map_x=map_x, map_y=map_y)
 
 
 def undistort_image(image: np.ndarray, grid: RemapGrid) -> np.ndarray:
-    remapped = cv2.remap(
+    return cv2.remap(
         image,
         grid.map_x,
         grid.map_y,
@@ -47,7 +45,6 @@ def undistort_image(image: np.ndarray, grid: RemapGrid) -> np.ndarray:
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=0,
     )
-    return remapped * grid.gain[..., None]
 
 
 def undistort_valid_mask(shape: tuple[int, int], grid: RemapGrid) -> np.ndarray:
