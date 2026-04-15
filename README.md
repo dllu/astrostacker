@@ -2,7 +2,7 @@
 
 Wide-angle astrophotography stacking pipeline for tripod-mounted RAW sequences with mixed static foreground and moving sky.
 
-![sample pic](https://pics.dllu.net/file/dllu-pics/stackedhp_c7e68004bf054f74.jpg)
+![sample pic](stackedhp_c7e68004bf054f74.jpg)
 
 It currently does the following:
 
